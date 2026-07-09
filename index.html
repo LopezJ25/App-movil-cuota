@@ -15,8 +15,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root{
   --bg:#0f1117;--bg2:#1a1f2e;--bg3:#232940;--bg4:#2d3450;
@@ -166,19 +165,11 @@ const MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','
 const MESES_C=['ENE','FEB','MAR','ABR','MAY','JUN','JUL','AGO','SEP','OCT','NOV','DIC'];
 
 // ====== FIREBASE ======
-// Reemplaza estos valores con los de TU proyecto Firebase (Configuración del proyecto > Tus apps > SDK setup).
-const firebaseConfig={
-  apiKey:"TU_API_KEY",
-  authDomain:"TU_PROYECTO.firebaseapp.com",
-  projectId:"TU_PROYECTO",
-  storageBucket:"TU_PROYECTO.appspot.com",
-  messagingSenderId:"TU_SENDER_ID",
-  appId:"TU_APP_ID"
-};
-firebase.initializeApp(firebaseConfig);
-const db=firebase.firestore();
-try{db.enablePersistence({synchronizeTabs:true});}catch(e){}
-const docRef=db.collection('cuotaspro').doc('main');
+// Reemplaza estos valores con los de TU proyecto Supabase (Project Settings > API).
+const SUPABASE_URL="https://kadwsjjtxevukychtfpd.supabase.co/rest/v1/";
+const SUPABASE_ANON_KEY="sb_publishable_3_lVy5cqdIlsgta8IdDGjQ_5qrUOG_g";
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+const ROW_ID='main';
 let dbReady=false;
 
 function defaultState(){
@@ -193,7 +184,7 @@ function defaultState(){
     nextId:4,nextMovId:1
   };
 }
-// Estado compartido (Firestore) y estado local por dispositivo (mes/año que estás viendo)
+// Estado compartido (Supabase) y estado local por dispositivo (mes/año que estás viendo)
 let S=defaultState();
 function loadUI(){
   try{const r=localStorage.getItem('cuotaspro_ui');if(r)return JSON.parse(r);}catch(e){}
@@ -201,15 +192,29 @@ function loadUI(){
 }
 let UI=loadUI();
 function saveUI(){try{localStorage.setItem('cuotaspro_ui',JSON.stringify(UI));}catch(e){}}
-function save(){docRef.set(S).catch(e=>{console.error(e);showToast('No se pudo guardar (revisa conexión)','error');});}
 
-docRef.onSnapshot(snap=>{
-  if(snap.exists){S=snap.data();}
-  else{S=defaultState();docRef.set(S);}
+async function save(){
+  const{error}=await sb.from('cuotaspro').upsert({id:ROW_ID,data:S});
+  if(error){console.error(error);showToast('No se pudo guardar (revisa conexión)','error');}
+}
+
+async function initData(){
+  const{data,error}=await sb.from('cuotaspro').select('data').eq('id',ROW_ID).maybeSingle();
+  if(error){console.error(error);showToast('Error de conexión con la base de datos','error');return;}
+  if(data){S=data.data;}
+  else{S=defaultState();await sb.from('cuotaspro').upsert({id:ROW_ID,data:S});}
   dbReady=true;
   updateMonthLabel();
   render();
-},err=>{console.error(err);showToast('Error de conexión con la base de datos','error');});
+}
+initData();
+
+// Sincroniza en tiempo real si otro dispositivo cambia los datos
+sb.channel('cuotaspro-changes')
+  .on('postgres_changes',{event:'*',schema:'public',table:'cuotaspro',filter:`id=eq.${ROW_ID}`},payload=>{
+    if(payload.new&&payload.new.data){S=payload.new.data;updateMonthLabel();render();}
+  })
+  .subscribe();
 
 function pk(pid,m,y){return `${pid}_${y}_${m}`;}
 function isPaid(pid,m,y){return !!S.pagos[pk(pid,m,y)];}
